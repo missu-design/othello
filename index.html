@@ -204,6 +204,80 @@
   .btn-reset:hover { background: rgba(255,255,255,0.15); color: var(--text); border-color: rgba(255,255,255,0.3); }
   .btn-reset:active { transform: scale(0.95); }
 
+  .btn-hint {
+    padding: 7px 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    cursor: pointer;
+    background: rgba(255,255,255,0.08);
+    color: var(--text-muted);
+    transition: all 0.2s;
+    flex-shrink: 0;
+    order: 4;
+    white-space: nowrap;
+  }
+  .btn-hint:hover { background: rgba(255,255,255,0.15); color: var(--text); border-color: rgba(255,255,255,0.3); }
+  .btn-hint:active { transform: scale(0.95); }
+  .btn-hint.on {
+    background: linear-gradient(135deg, var(--board-light), #34d058);
+    color: #000;
+    border-color: transparent;
+  }
+
+  .pass-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.78);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 90;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s, visibility 0.25s;
+    padding: 24px 16px;
+    text-align: center;
+  }
+  .pass-overlay.show { opacity: 1; visibility: visible; }
+  .pass-overlay .pass-title {
+    font-size: clamp(1.6rem, 6vw, 2.4rem);
+    font-weight: 800;
+    margin-bottom: 8px;
+    color: #ffd700;
+  }
+  .pass-overlay .pass-desc {
+    font-size: clamp(0.85rem, 2.6vw, 1.05rem);
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    max-width: 320px;
+    line-height: 1.5;
+  }
+  .pass-overlay .pass-btns { display: flex; flex-direction: column; gap: 12px; }
+  .pass-btn {
+    padding: 14px 40px;
+    font-size: clamp(1rem, 3.4vw, 1.25rem);
+    font-weight: 700;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+    min-width: 200px;
+    transition: transform 0.12s ease, box-shadow 0.2s ease;
+  }
+  .pass-btn:active { transform: scale(0.96); }
+  .pass-btn.pass {
+    background: linear-gradient(135deg, #fbbd00, #f7b400);
+    color: #111;
+    box-shadow: 0 8px 24px rgba(251,189,0,0.35);
+  }
+  .pass-btn.cancel {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-muted);
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+
   /* Difficulty badge styling (inline) */
   .turn-indicator .difficulty-inline {
     font-size: clamp(0.65rem, 1.8vw, 0.75rem);
@@ -469,6 +543,15 @@
 
 <div class="confetti-container" id="confetti-container"></div>
 
+  <!-- PASS OVERLAY -->
+  <div class="pass-overlay" id="pass-overlay">
+    <div class="pass-title" id="pass-title">PASS</div>
+    <div class="pass-desc" id="pass-desc">合法手がありません。パスしますか？</div>
+    <div class="pass-btns">
+      <button class="pass-btn pass" id="pass-btn">パスする</button>
+    </div>
+  </div>
+
 <h1>オセロ</h1>
 <div class="game-container">
   <div class="info-bar">
@@ -487,6 +570,7 @@
       <span class="piece-icon white"></span>
     </div>
     <button class="btn-reset" id="reset-btn" title="リセット">リセット</button>
+    <button class="btn-hint" id="hint-toggle" title="ヒント表示切替">ヒント: OFF</button>
   </div>
   <div class="board-wrapper">
     <div class="board" id="board"></div>
@@ -510,6 +594,8 @@
   let scores = { black: 2, white: 2 };
   let gameTokenCounter = 0;
   let currentGameToken = 0;
+  let showHints = false;  // ヒント表示のオン/オフ（初期：OFF）
+  let passOverlayActive = false;  // パス画面表示フラグ
 
   const WEIGHT_TABLE = [
     [120,-87, 16,-16, -4, -4,  8, -6],
@@ -535,6 +621,11 @@
   const changeDiffBtn = document.getElementById('change-diff-btn');
   const confettiContainer = document.getElementById('confetti-container');
   const resetBtn = document.getElementById('reset-btn');
+  const hintToggleBtn = document.getElementById('hint-toggle');
+  const passOverlay = document.getElementById('pass-overlay');
+  const passTitle = document.getElementById('pass-title');
+  const passDesc = document.getElementById('pass-desc');
+  const passBtn = document.getElementById('pass-btn');
   const titleOverlay = document.getElementById('title-overlay');
   const titleMain = document.getElementById('title-main');
   const diffSelect = document.getElementById('diff-select');
@@ -702,6 +793,8 @@
         cellEls[r][c].classList.remove('valid');
       }
     }
+    // ヒント表示がOFFなら合法手のマーキングをしない（判定自体は通常通り）
+    if (!showHints) return;
     const validMoves = getValidMoves(currentTurn);
     for (const [vr, vc] of validMoves) {
       cellEls[vr][vc].classList.add('valid');
@@ -906,17 +999,25 @@
         return;
       }
       // Pass
-      const passText = currentTurn === BLACK ? 'あなたは PASS！' : 'CPU は PASS！';
-      showPassBanner(passText);
-      shakeBoard();
-      playSound('pass');
-      await sleep(1000);
-      if (currentGameToken !== token) return;
-      currentTurn = opponent;
-      updateTurnIndicator();
-      // Check the other player recursively (sequential, never recursive-overflow danger)
-      await tick(token);
-      return;
+      if (currentTurn === BLACK) {
+        // プレイヤーのパス: オーバーレイを表示してパスボタンを表示
+        showPassOverlay(true);
+        playSound('pass');
+        // パスボタンが押されるまで待機（イベントドリブン）
+        return;
+      } else {
+        // CPUのパス: 自動的にパス（オーバーレイを短時間表示）
+        showPassOverlay(false);
+        playSound('pass');
+        await sleep(1000);
+        if (currentGameToken !== token) return;
+        hidePassOverlay();
+        currentTurn = opponent;
+        updateTurnIndicator();
+        // Check the other player (sequential)
+        await tick(token);
+        return;
+      }
     }
 
     // Current player HAS valid moves
@@ -939,11 +1040,13 @@
 
     const move = getComputerMove();
     if (move === null) {
-      // CPU has no valid moves → PASS
+      // CPU has no valid moves → PASS (自動的にパス)
       thinking = false;
-      showPassBanner('CPU は PASS！');
-      shakeBoard();
+      showPassOverlay(false);
       playSound('pass');
+      await sleep(1000);
+      if (currentGameToken !== token) return;
+      hidePassOverlay();
       currentTurn = BLACK;
       updateTurnIndicator();
       await tick(token);
@@ -990,12 +1093,16 @@
     countPieces();
     updateUI();
     updateTurnIndicator();
+    showHints = false; // 初期設定はOFF
+    hintToggleBtn.textContent = 'ヒント: OFF';
+    hintToggleBtn.classList.remove('on');
     hideOverlays();
     tick(currentGameToken);
   }
 
   function hideOverlays() {
     resultOverlay.classList.remove('show');
+    hidePassOverlay();
   }
 
   function showResultScreen(diff) {
@@ -1086,6 +1193,26 @@
   // ---------- UTILS ----------
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  // ---------- PASS OVERLAY ----------
+  function showPassOverlay(isPlayerPass) {
+    passOverlayActive = true;
+    if (isPlayerPass) {
+      passTitle.textContent = 'PASS';
+      passDesc.textContent = '合法手がありません。パスしますか？';
+      passBtn.textContent = 'パスする';
+    } else {
+      passTitle.textContent = 'CPU PASS';
+      passDesc.textContent = 'CPUは合法手がありません。自動的にパスします。';
+      passBtn.textContent = 'OK';
+    }
+    passOverlay.classList.add('show');
+  }
+
+  function hidePassOverlay() {
+    passOverlayActive = false;
+    passOverlay.classList.remove('show');
+  }
+
   // ---------- EVENT LISTENERS ----------
   document.getElementById('play-btn').addEventListener('click', () => {
     playSound('place');
@@ -1114,6 +1241,27 @@
   resetBtn.addEventListener('click', () => {
     playSound('place');
     startGame(difficulty);
+  });
+
+  // ヒント表示切替ボタン
+  hintToggleBtn.addEventListener('click', () => {
+    playSound('place');
+    showHints = !showHints;
+    hintToggleBtn.textContent = showHints ? 'ヒント: ON' : 'ヒント: OFF';
+    hintToggleBtn.classList.toggle('on', showHints);
+    updateValidMoves(); // ヒント表示状態に合わせて更新
+  });
+
+  // パスオーバーレイのパスボタン
+  passBtn.addEventListener('click', () => {
+    playSound('place');
+    hidePassOverlay();
+    // パス確定：ターンを切り替えて tick() を呼び出す
+    if (!gameOver) {
+      currentTurn = currentTurn === BLACK ? WHITE : BLACK;
+      updateTurnIndicator();
+      tick(currentGameToken);
+    }
   });
 
   // ---------- INIT ----------
